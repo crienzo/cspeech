@@ -113,6 +113,16 @@ struct ref_value {
  * A node in the SRGS parse tree
  */
 struct srgs_node {
+  srgs_node(const std::string &name, srgs_node_type type);
+  srgs_node();
+  ~srgs_node();
+  srgs_node *get_parent(void) { return parent; }
+  srgs_node *get_last_sibling(void);
+  srgs_node *insert(const std::string &name, srgs_node_type type);
+  srgs_node *insert_string(const std::string &str);
+  void log_node_open(void);
+  void log_node_close(void);
+
   /** Name of node */
   std::string name;
   /** Type of node */
@@ -162,7 +172,7 @@ struct srgs_grammar {
   /** grammar language */
   std::string language;
   /** true if digit grammar */
-  int digit_mode;
+  bool digit_mode;
   /** grammar parse tree root */
   srgs_node *root;
   /** root rule */

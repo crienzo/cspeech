@@ -42,7 +42,7 @@ static struct {
  * @param name of entity
  * @return the type or ANY
  */
-static enum srgs_node_type string_to_node_type(const std::string &name)
+static srgs_node_type string_to_node_type(const std::string &name)
 {
   if (name == "grammar") {
     return SNT_GRAMMAR;
@@ -83,9 +83,9 @@ static enum srgs_node_type string_to_node_type(const std::string &name)
 /**
  * Log node
  */
-static void sn_log_node_open(struct srgs_node *node)
+void srgs_node::log_node_open(void)
 {
-  switch (node->type) {
+  switch (type) {
     case SNT_ANY:
     case SNT_METADATA:
     case SNT_META:
@@ -95,22 +95,22 @@ static void sn_log_node_open(struct srgs_node *node)
     case SNT_TAG:
     case SNT_ONE_OF:
     case SNT_GRAMMAR:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<%s>\n", node->name.c_str());
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<%s>\n", name.c_str());
       return;
-	case SNT_RULE:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<rule id='%s' scope='%s'>\n", node->value.rule.id.c_str(), node->value.rule.is_public ? "public" : "private");
+    case SNT_RULE:
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<rule id='%s' scope='%s'>\n", value.rule.id.c_str(), value.rule.is_public ? "public" : "private");
       return;
     case SNT_ITEM:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<item repeat='%i'>\n", node->value.item.repeat_min);
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<item repeat='%i'>\n", value.item.repeat_min);
       return;
     case SNT_UNRESOLVED_REF:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri.c_str());
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<ruleref (unresolved) uri='%s'\n", value.ref.uri.c_str());
       return;
     case SNT_REF:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id.c_str());
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "<ruleref uri='#%s'>\n", value.ref.node->value.rule.id.c_str());
       return;
     case SNT_STRING:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "%s\n", node->value.str.c_str());
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "%s\n", value.str.c_str());
       return;
   }
 }
@@ -118,9 +118,9 @@ static void sn_log_node_open(struct srgs_node *node)
 /**
  * Log node
  */
-static void sn_log_node_close(struct srgs_node *node)
+void srgs_node::log_node_close(void)
 {
-  switch (node->type) {
+  switch (type) {
     case SNT_GRAMMAR:
     case SNT_RULE:
     case SNT_ONE_OF:
@@ -133,7 +133,7 @@ static void sn_log_node_close(struct srgs_node *node)
     case SNT_META:
     case SNT_METADATA:
     case SNT_ANY:
-      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "</%s>\n", node->name.c_str());
+      cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "</%s>\n", name.c_str());
       return;
     case SNT_UNRESOLVED_REF:
       cspeech_log_printf(CSPEECH_LOG_DEBUG, 0, "</ruleref (unresolved)>\n");
@@ -144,65 +144,46 @@ static void sn_log_node_close(struct srgs_node *node)
 }
 
 /**
- * Create a new node
- * @param name of node
- * @param type of node
- * @return the node
- */
-static struct srgs_node *sn_new(const std::string &name, enum srgs_node_type type)
-{
-  struct srgs_node *node = new srgs_node;
-  node->name = name;
-  node->type = type;
-  return node;
-}
-
-/**
- * @param node to search
  * @return the last sibling of node
  */
-static struct srgs_node *sn_find_last_sibling(struct srgs_node *node)
+srgs_node *srgs_node::get_last_sibling(void)
 {
-  if (node && node->next) {
-    return sn_find_last_sibling(node->next);
+  if (next) {
+    return next->get_last_sibling();
   }
-  return node;
+  return this;
 }
 
 /**
  * Add child node
- * @param parent node to add child to
  * @param name the child node name
  * @param type the child node type
  * @return the child node
  */
-static struct srgs_node *sn_insert(struct srgs_node *parent, const std::string &name, enum srgs_node_type type)
+srgs_node *srgs_node::insert(const std::string &name, srgs_node_type type)
 {
-  struct srgs_node *sibling = parent ? sn_find_last_sibling(parent->child) : 0;
-  struct srgs_node *child = sn_new(name, type);
-  if (parent) {
-    parent->num_children++;
-    child->parent = parent;
-  }
+  srgs_node *sibling = child ? child->get_last_sibling() : 0;
+  srgs_node *new_child = new srgs_node(name, type);
+  num_children++;
+  new_child->parent = this;
   if (sibling) {
-    sibling->next = child;
-  } else if (parent) {
-    parent->child = child;
+    sibling->next = new_child;
+  } else {
+    child = new_child;
   }
-  return child;
+  return new_child;
 }
 
 /**
  * Add string child node
- * @param parent node to add string to
  * @param str string to add - this function does not copy the string
  * @return the string child node
  */
-static srgs_node *sn_insert_string(struct srgs_node *parent, const std::string &str)
+srgs_node *srgs_node::insert_string(const std::string &str)
 {
-  srgs_node *child = sn_insert(parent, str, SNT_STRING);
-  child->value.str = str;
-  return child;
+  srgs_node *new_child = insert(str, SNT_STRING);
+  new_child->value.str = str;
+  return new_child;
 }
 
 /**
@@ -519,7 +500,11 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 
   if (type == IKS_OPEN || type == IKS_SINGLE) {
     srgs_node_type ntype = string_to_node_type(name);
-    grammar->cur = sn_insert(grammar->cur, name, ntype);
+    if (grammar->cur) {
+      grammar->cur = grammar->cur->insert(name, ntype);
+    } else {
+      grammar->cur = new srgs_node(name, ntype);
+    }
     std::map<std::string, tag_definition *>::iterator i;
     i = globals.tag_defs.find(name);
     if (i == globals.tag_defs.end()) {
@@ -528,12 +513,12 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
       grammar->cur->tag_def = i->second;
     }
     result = process_tag(grammar, name, atts);
-    sn_log_node_open(grammar->cur);
+    grammar->cur->log_node_open();
   }
 
   if (type == IKS_CLOSE || type == IKS_SINGLE) {
-    sn_log_node_close(grammar->cur);
-    grammar->cur = grammar->cur->parent;
+    grammar->cur->log_node_close();
+    grammar->cur = grammar->cur->get_parent();
   }
 
   return result;
@@ -568,8 +553,8 @@ static int process_cdata_tokens(srgs_grammar *grammar, const std::string &data)
   if (grammar->digit_mode) {
     for (int i = 0; i < data.size(); i++) {
       if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
-        string_node = sn_insert_string(string_node, data.substr(i, 1));
-        sn_log_node_open(string_node);
+        string_node = string_node->insert_string(data.substr(i, 1));
+        string_node->log_node_open();
       }
     }
   } else {
@@ -578,7 +563,7 @@ static int process_cdata_tokens(srgs_grammar *grammar, const std::string &data)
     std::string::size_type end = data_dup.find_last_not_of(" \t");
     if (begin != std::string::npos && begin != end) {
       data_dup = data_dup.substr(begin, end);
-      string_node = sn_insert_string(string_node, data_dup);
+      string_node = string_node->insert_string(data_dup);
     }
   }
   return IKS_OK;
@@ -609,13 +594,53 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 }
 
 /**
+ * Create a node in the grammar tree
+ */
+srgs_node::srgs_node(const std::string &name, srgs_node_type type) :
+  name(name),
+  type(type),
+  parent(0),
+  child(0),
+  next(0),
+  num_children(0),
+  tag_def(0),
+  visited(false)
+{
+}
+
+/**
+ * Create a node in the grammar tree
+ */
+srgs_node::srgs_node() :
+  type(SNT_ANY),
+  parent(0),
+  child(0),
+  next(0),
+  num_children(0),
+  tag_def(0),
+  visited(false)
+{
+}
+
+/**
+ * Destroy the tree
+ */
+srgs_node::~srgs_node()
+{
+  /* TODO */
+}
+
+/**
  * Create a new parsed grammar
  * @param parser
  */
-srgs_grammar::srgs_grammar(const std::string &uuid) : 
-  uuid(uuid),
+srgs_grammar::srgs_grammar(const std::string &uuid) :
+  cur(0),
+  digit_mode(false),
   root(0),
-  cur(0)
+  root_rule(0),
+  compiled_regex(0),
+  uuid(uuid)
 {
 }
 
@@ -627,7 +652,10 @@ srgs_grammar::~srgs_grammar() {
     pcre_free(compiled_regex);
   }
   if (jsgf_file_name != "") {
-	unlink(jsgf_file_name.c_str());
+    unlink(jsgf_file_name.c_str());
+  }
+  if (root) {
+    delete root;
   }
 }
 
@@ -656,7 +684,7 @@ srgs_parser::~srgs_parser()
  */
 static int create_regexes(srgs_grammar *grammar, srgs_node *node, std::stringstream &stream)
 {
-  sn_log_node_open(node);
+  node->log_node_open();
   switch (node->type) {
     case SNT_GRAMMAR:
       if (node->child) {
@@ -818,7 +846,7 @@ static int create_regexes(srgs_grammar *grammar, srgs_node *node, std::stringstr
       /* ignore */
       return 1;
   }
-  sn_log_node_close(node);
+  node->log_node_close();
   return 1;
 }
 
@@ -851,7 +879,7 @@ pcre *srgs_grammar::get_compiled_regex(void)
  */
 static int resolve_refs(srgs_grammar *grammar, srgs_node *node, int level)
 {
-  sn_log_node_open(node);
+  node->log_node_open();
   if (node->visited) {
     cspeech_log_printf(CSPEECH_LOG_INFO, grammar->uuid.c_str(), "Loop detected.\n");
     return 0;
@@ -905,7 +933,7 @@ static int resolve_refs(srgs_grammar *grammar, srgs_node *node, int level)
   }
 
   node->visited = 0;
-  sn_log_node_close(node);
+  node->log_node_close();
   return 1;
 }
 
@@ -1088,7 +1116,7 @@ const std::string &srgs_grammar::to_regex(void)
  */
 static int create_jsgf(srgs_grammar *grammar, srgs_node *node, std::stringstream &stream)
 {
-  sn_log_node_open(node);
+  node->log_node_open();
   switch (node->type) {
     case SNT_GRAMMAR:
       if (node->child) {
@@ -1282,7 +1310,7 @@ static int create_jsgf(srgs_grammar *grammar, srgs_node *node, std::stringstream
       /* ignore */
       return 1;
   }
-  sn_log_node_close(node);
+  node->log_node_close();
   return 1;
 }
 

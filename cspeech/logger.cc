@@ -18,7 +18,7 @@
 
 static int default_logging_callback(cspeech_log_level_t log_level, const char *id, const char *file, int line, const char *log_message)
 {
-	puts(log_message);
+	printf("%s\t%s:%d %s", id == 0 ? "" : id, file, line, log_message);
 }
 
 static cspeech_logging_callback logger = default_logging_callback;
