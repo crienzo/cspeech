@@ -27,8 +27,10 @@ lib_LTLIBRARIES = libcspeech-@CSPEECH_API_VERSION@.la
 ## from each source file.  Note that it is not necessary to list header files
 ## which are already listed elsewhere in a _HEADERS variable assignment.
 libcspeech_@CSPEECH_API_VERSION@_la_SOURCES = cspeech.cc \
+                                              cspeech/logger.cc \
                                               cspeech/nlsml.cc \
-                                              cspeech/srgs.cc
+                                              cspeech/srgs.cc \
+                                              cspeech/utils.cc
 
 ## Instruct libtool to include ABI version information in the generated shared
 ## library file (.so).  The library ABI version is defined in configure.ac, so

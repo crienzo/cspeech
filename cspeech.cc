@@ -13,13 +13,15 @@
 #include "cspeech.h"
 #include "cspeech/cspeech_private.h"
 
+#include <string.h>
+
 struct cspeech_srgs_parser {
   struct srgs_parser *parser;
 };
 
 struct cspeech_srgs_grammar {
   struct srgs_grammar *grammar;
-}
+};
 
 int cspeech_init(void)
 {
@@ -60,7 +62,7 @@ const char *cspeech_srgs_grammar_to_jsgf(struct cspeech_srgs_grammar *grammar)
   if (!grammar) {
     return NULL;
   }
-  const str::string &jsgf = grammar->grammar->to_jsgf();
+  const std::string &jsgf = grammar->grammar->to_jsgf();
   if (jsgf == "") {
     return NULL;
   }
@@ -69,17 +71,17 @@ const char *cspeech_srgs_grammar_to_jsgf(struct cspeech_srgs_grammar *grammar)
 
 const char *cspeech_srgs_grammar_to_jsgf_file(struct cspeech_srgs_grammar *grammar, const char *basedir, const char *ext)
 {
-  if (!grammar || !basedir || !ext) {
+  if (!grammar || cspeech_zstr(basedir) || cspeech_zstr(ext)) {
     return NULL;
   }
-  const str::string &jsgf_file = grammar->grammar->to_jsgf_file(basedir_str, ext_str);
+  const std::string &jsgf_file = grammar->grammar->to_jsgf_file(std::string(basedir), std::string(ext));
   if (jsgf_file == "") {
     return NULL;
   }
   return jsgf_file.c_str();
 }
 
-enum srgs_match_type cspeech_srgs_grammar_match(struct cspeech_srgs_grammar *grammar, const char *input, const char **interpretation)
+enum cspeech_srgs_match_type cspeech_srgs_grammar_match(struct cspeech_srgs_grammar *grammar, const char *input, char **interpretation)
 {
   std::string input_str;
   std::string interpretation_str;
@@ -87,7 +89,7 @@ enum srgs_match_type cspeech_srgs_grammar_match(struct cspeech_srgs_grammar *gra
   if (!cspeech_zstr(input)) {
     input_str = input;
   }
-  enum_srgs_match_type match = grammar->grammar->match(input_str, interpretation_str);
+  enum cspeech_srgs_match_type match = grammar->grammar->match(input_str, interpretation_str);
   if (interpretation_str != "") {
 	  *interpretation = strdup(interpretation_str.c_str());
   }

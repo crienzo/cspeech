@@ -32,7 +32,8 @@ typedef enum {
   CSPEECH_LOG_ALERT = 1,
 } cspeech_log_level_t;
 
-typedef int (*cspeech_logging_callback)(void *context, cspeech_log_level_t log_level, const char *log_message, ...);
+typedef int (*cspeech_logging_callback)(cspeech_log_level_t log_level, const char *id, const char *file, int line, const char *log_message);
+void cspeech_set_logger(cspeech_logging_callback logger);
 
 #if 0
 /* NLSML */
@@ -67,11 +68,11 @@ enum cspeech_srgs_match_type {
 };
 
 struct cspeech_srgs_parser *cspeech_srgs_parser_new(const char *uuid);
-struct cspeech_srgs_grammar *srgs_parse(struct cspeech_srgs_parser *parser, const char *document);
+struct cspeech_srgs_grammar *cspeech_srgs_parse(struct cspeech_srgs_parser *parser, const char *document);
 const char *cspeech_srgs_to_regex(struct cspeech_srgs_grammar *grammar);
 const char *cspeech_srgs_to_jsgf(struct cspeech_srgs_grammar *grammar);
 const char *cspeech_srgs_to_jsgf_file(struct cspeech_srgs_grammar *grammar, const char *basedir, const char *ext);
-enum cspeech_srgs_match_type srgs_grammar_match(struct cspeech_srgs_grammar *grammar, const char *input, const char **interpretation);
+enum cspeech_srgs_match_type cspeech_srgs_grammar_match(struct cspeech_srgs_grammar *grammar, const char *input, char **interpretation);
 void cspeech_srgs_grammar_destroy(struct cspeech_srgs_grammar *grammar);
 void cspeech_srgs_parser_destroy(struct cspeech_srgs_parser *parser);
 

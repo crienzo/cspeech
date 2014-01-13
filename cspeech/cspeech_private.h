@@ -10,8 +10,10 @@
  * cspeech_private.h
  *
  */
-#ifndef CSPEECH_PRIVATE_H
-#define CSPEECH_PRIVATE_H
+#ifndef CSPEECH_PRIVATE_H_
+#define CSPEECH_PRIVATE_H_
+
+#include <pcre.h>
 
 #include <map>
 #include <string>
@@ -23,11 +25,18 @@ struct srgs_node;
 struct srgs_grammar;
 struct srgs_parser;
 
+int cspeech_zstr(const char *s);
+bool cspeech_is_number(const std::string &str);
+
+#define cspeech_log_printf(level, id, ...) _cspeech_log_printf(level, id, __FILE__, __LINE__, __VA_ARGS__)
+void _cspeech_log_printf(cspeech_log_level_t log_level, const char *id, const char *file, int line, const char *format, ...);
+
 /** function to handle tag attributes */
 typedef int (* tag_attribs_fn)(srgs_grammar *, char **);
 /** function to handle tag CDATA */
 typedef int (* tag_cdata_fn)(srgs_grammar *, const std::string &);
 
+int srgs_init(void);
 
 /**
  * Tag definition
@@ -137,7 +146,7 @@ struct srgs_grammar {
   srgs_grammar(const std::string &uuid);
   ~srgs_grammar();
   pcre *get_compiled_regex(void);
-  srgs_match_type match(const std::string &input, std::string &interpretation);
+  cspeech_srgs_match_type match(const std::string &input, std::string &interpretation);
   const std::string &to_regex(void);
   const std::string &to_jsgf(void);
   const std::string &to_jsgf_file(const std::string &basedir, const std::string &ext);
