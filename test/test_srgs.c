@@ -1,5 +1,5 @@
 #include "test.h"
-#include "cspeech/srgs.h"
+#include "cspeech.h"
 
 static const char *adhearsion_menu_grammar =
   "<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"options\" tag-format=\"semantics/1.0-literals\">"

@@ -42,8 +42,7 @@ libcspeech_@CSPEECH_API_VERSION@_la_LDFLAGS = -version-info $(CSPEECH_SO_VERSION
 ## source tree matches the hierarchy at the install location, however.
 cspeech_includedir = $(includedir)/cspeech-$(CSPEECH_API_VERSION)
 nobase_cspeech_include_HEADERS = cspeech.h \
-                                 cspeech/nlsml.h \
-                                 cspeech/srgs.h
+                                 cspeech/cspeech_private.h
 
 ## The generated configuration header is installed in its own subdirectory of
 ## $(libdir).  The reason for this is that the configuration information put

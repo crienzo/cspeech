@@ -7,3 +7,12 @@ Speech document (SSML, SRGS, NLSML) modelling and matching for C
 
 * PCRE
 * [iksemel](https://code.google.com/p/iksemel/)
+
+# To build
+aclocal
+libtoolize
+autoreconf
+automake --add-missing
+./configure
+make
+

@@ -14,7 +14,11 @@
 #ifndef CSPEECH_H_
 #define CSPEECH_H_
 
+#ifdef __cplusplus
 extern "C" {
+#endif
+
+int cspeech_init(void);
 
 /* logging */
 
@@ -30,7 +34,7 @@ typedef enum {
 
 typedef int (*cspeech_logging_callback)(void *context, cspeech_log_level_t log_level, const char *log_message, ...);
 
-
+#if 0
 /* NLSML */
 
 enum nlsml_match_type {
@@ -44,32 +48,35 @@ extern int nlsml_init(void);
 enum nlsml_match_type nlsml_parse(const char *result, const char *uuid);
 iks *nlsml_normalize(const char *result);
 extern iks *nlsml_create_dtmf_match(const char *digits, const char *interpretation);
+#endif
 
 /* SRGS */
 
-struct srgs_parser;
-struct srgs_grammar;
+struct cspeech_srgs_parser;
+struct cspeech_srgs_grammar;
 
-enum srgs_match_type {
+enum cspeech_srgs_match_type {
   /** invalid input */
-  SMT_NO_MATCH,
+  CSMT_NO_MATCH,
   /** matches, can accept more input */
-  SMT_MATCH,
+  CSMT_MATCH,
   /** not yet a match, but valid input so far */
-  SMT_MATCH_PARTIAL,
+  CSMT_MATCH_PARTIAL,
   /** matches, cannot accept more input */
-  SMT_MATCH_END
+  CSMT_MATCH_END
 };
 
-extern int srgs_init(void);
-extern struct srgs_parser *srgs_parser_new(const char *uuid);
-extern struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document);
-extern const char *srgs_grammar_to_regex(struct srgs_grammar *grammar);
-extern const char *srgs_grammar_to_jsgf(struct srgs_grammar *grammar);
-extern const char *srgs_grammar_to_jsgf_file(struct srgs_grammar *grammar, const char *basedir, const char *ext);
-extern enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char *input, const char **interpretation);
-extern void srgs_parser_destroy(struct srgs_parser *parser);
+struct cspeech_srgs_parser *cspeech_srgs_parser_new(const char *uuid);
+struct cspeech_srgs_grammar *srgs_parse(struct cspeech_srgs_parser *parser, const char *document);
+const char *cspeech_srgs_to_regex(struct cspeech_srgs_grammar *grammar);
+const char *cspeech_srgs_to_jsgf(struct cspeech_srgs_grammar *grammar);
+const char *cspeech_srgs_to_jsgf_file(struct cspeech_srgs_grammar *grammar, const char *basedir, const char *ext);
+enum cspeech_srgs_match_type srgs_grammar_match(struct cspeech_srgs_grammar *grammar, const char *input, const char **interpretation);
+void cspeech_srgs_grammar_destroy(struct cspeech_srgs_grammar *grammar);
+void cspeech_srgs_parser_destroy(struct cspeech_srgs_parser *parser);
 
+#ifdef __cplusplus
 }
+#endif
 
 #endif // CSPEECH_H_
