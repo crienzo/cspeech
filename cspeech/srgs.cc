@@ -1,43 +1,30 @@
 /*
  * cspeech - Speech document (SSML, SRGS, NLSML) modelling and matching for C
- * Copyright (C) 2013, Grasshopper
+ * Copyright (C) 2013-2014, Grasshopper
  *
  * License: MIT
  *
  * Contributor(s):
  * Chris Rienzo <chris.rienzo@grasshopper.com>
  *
- * srgs.c -- Transforms SRGS into regex rules
+ * srgs.cc -- Transforms SRGS into regex rules
  *
  */
 
 #include <iksemel.h>
 #include <pcre.h>
-#include <stdbool.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
-#include <sstream>
-#include <map>
 
+#include <sstream>
+#include <climits>
+
+#include "cspeech_private.h"
 #include "cspeech.h"
-#include "srgs.h"
 
 #define MAX_RECURSION 100
-#define MAX_TAGS 30
-
-/** function to handle tag attributes */
-typedef int (* tag_attribs_fn)(struct srgs_grammar *, char **);
-/** function to handle tag CDATA */
-typedef int (* tag_cdata_fn)(struct srgs_grammar *, char *, size_t);
-
-/**
- * Tag definition
- */
-struct tag_def {
-  tag_attribs_fn attribs_fn;
-  tag_cdata_fn cdata_fn;
-  bool is_root;
-  std::map<const char *,const char *> children_tags;
-};
 
 /**
  * library configuration
@@ -46,194 +33,90 @@ static struct {
   /** true if initialized */
   bool init;
   /** Mapping of tag name to definition */
-  std::map<const char *,struct tag_def *> tag_defs;
-  /** library memory pool */
-  switch_memory_pool_t *pool;
+  std::map<std::string, tag_definition *> tag_defs;
   /** Callback for logging messages **/
-  int (*logging_callback)(void *context, cspeech_log_level_t log_level, const char *log_message, ...);
+  cspeech_logging_callback logging_callback;
 } globals;
 
-/**
- * SRGS node types
- */
-enum srgs_node_type {
-  /** anything */
-  SNT_ANY,
-  /** <grammar> */
-  SNT_GRAMMAR,
-  /** <rule> */
-  SNT_RULE,
-  /** <one-of> */
-  SNT_ONE_OF,
-  /** <item> */
-  SNT_ITEM,
-  /** <ruleref> unresolved reference to node */
-  SNT_UNRESOLVED_REF,
-  /** <ruleref> resolved reference to node */
-  SNT_REF,
-  /** <item> string */
-  SNT_STRING,
-  /** <tag> */
-  SNT_TAG,
-  /** <lexicon> */
-  SNT_LEXICON,
-  /** <example> */
-  SNT_EXAMPLE,
-  /** <token> */
-  SNT_TOKEN,
-  /** <meta> */
-  SNT_META,
-  /** <metadata> */
-  SNT_METADATA
-};
+
+static inline int cspeech_zstr(const char *s)
+{
+  return !s || *s == '\0';
+}
+
+static inline bool cspeech_is_number(const std::string &str)
+{
+  if (str == "") {
+    return false;
+  }
+
+  int i = 0;
+  if (str[0] == '-' || str[0] == '+') {
+    i++;
+  }
+  if (str.length() == 2) {
+    return false;
+  }
+
+  for (; i < str.length(); i++) {
+    char c = str[i];
+    if (!(c == '.' || (c >= '0' && c <= '9'))) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 /**
- * <rule> value
+ * Default logger to stdout
  */
-struct rule_value {
-  char is_public;
-  const char *id;
-  char *regex;
-};
-
-/**
- * <item> value
- */
-struct item_value {
-  int repeat_min;
-  int repeat_max;
-  const char *weight;
-  int tag;
-};
-
-/**
- * <ruleref> value
- */
-union ref_value {
-  struct srgs_node *node;
-  char *uri;
-};
-
-/**
- * A node in the SRGS parse tree
- */
-struct srgs_node {
-  /** Name of node */
-  const char *name;
-  /** Type of node */
-  enum srgs_node_type type;
-  /** True if node has been inspected for loops */
-  char visited;
-  /** Node value */
-  union {
-    char *root;
-    const char *string;
-    union ref_value ref;
-    struct rule_value rule;
-    struct item_value item;
-  } value;
-  /** parent node */
-  struct srgs_node *parent;
-  /** child node */
-  struct srgs_node *child;
-  /** sibling node */
-  struct srgs_node *next;
-  /** number of child nodes */
-  int num_children;
-  /** tag handling data */
-  struct tag_def *tag_def;
-};
-
-/**
- * A parsed grammar
- */
-struct srgs_grammar {
-  /** grammar memory pool */
-  switch_memory_pool_t *pool;
-  /** current node being parsed */
-  struct srgs_node *cur;
-  /** rule names mapped to node */
-  std::map<const char *,struct srgs_node *> rules;
-  /** possible matching tags */
-  const char *tags[MAX_TAGS + 1];
-  /** number of tags */
-  int tag_count;
-  /** grammar encoding */
-  char *encoding;
-  /** grammar language */
-  char *language;
-  /** true if digit grammar */
-  int digit_mode;
-  /** grammar parse tree root */
-  struct srgs_node *root;
-  /** root rule */
-  struct srgs_node *root_rule;
-  /** compiled grammar regex */
-  pcre *compiled_regex;
-  /** grammar in regex format */
-  char *regex;
-  /** grammar in JSGF format */
-  char *jsgf;
-  /** grammar as JSGF file */
-  char *jsgf_file_name;
-  /** synchronizes access to this grammar */
-  switch_mutex_t *mutex;
-  /** optional uuid for logging */
-  const char *uuid;
-};
-
-/**
- * The SRGS SAX parser
- */
-struct srgs_parser {
-  /** parser memory pool */
-  switch_memory_pool_t *pool;
-  /** grammar cache */
-  switch_hash_t *cache;
-  /** cache mutex */
-  switch_mutex_t *mutex;
-  /** optional uuid for logging */
-  const char *uuid;
-};
+static int default_logging_callback(void *context, cspeech_log_level_t log_level, const char *log_message, ...)
+{
+	va_list ap;
+	va_start(ap, log_message);
+	vprintf(log_message, ap);
+	va_end(ap);
+}
 
 /**
  * Convert entity name to node type
  * @param name of entity
  * @return the type or ANY
  */
-static enum srgs_node_type string_to_node_type(char *name)
+static enum srgs_node_type string_to_node_type(const std::string &name)
 {
-  if (!strcmp("grammar", name)) {
+  if (name == "grammar") {
     return SNT_GRAMMAR;
   }
-  if (!strcmp("item", name)) {
+  if (name == "item") {
     return SNT_ITEM;
   }
-  if (!strcmp("one-of", name)) {
+  if (name == "one-of") {
     return SNT_ONE_OF;
   }
-  if (!strcmp("ruleref", name)) {
+  if (name == "ruleref") {
     return SNT_UNRESOLVED_REF;
   }
-  if (!strcmp("rule", name)) {
+  if (name =="rule") {
     return SNT_RULE;
   }
-  if (!strcmp("tag", name)) {
+  if (name == "tag") {
     return SNT_TAG;
   }
-  if (!strcmp("lexicon", name)) {
+  if (name == "lexicon") {
     return SNT_LEXICON;
   }
-  if (!strcmp("example", name)) {
+  if (name == "example") {
     return SNT_EXAMPLE;
   }
-  if (!strcmp("token", name)) {
+  if (name == "token") {
     return SNT_TOKEN;
   }
-  if (!strcmp("meta", name)) {
+  if (name == "meta") {
     return SNT_META;
   }
-  if (!strcmp("metadata", name)) {
+  if (name == "metadata") {
     return SNT_METADATA;
   }
   return SNT_ANY;
@@ -254,34 +137,22 @@ static void sn_log_node_open(struct srgs_node *node)
     case SNT_TAG:
     case SNT_ONE_OF:
     case SNT_GRAMMAR:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "<%s>\n", node->name);
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "<%s>\n", node->name.c_str());
       return;
-    case SNT_RULE:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "<rule id='%s' scope='%s'>\n", node->value.rule.id, node->value.rule.is_public ? "public" : "private");
-      }
+	case SNT_RULE:
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "<rule id='%s' scope='%s'>\n", node->value.rule.id.c_str(), node->value.rule.is_public ? "public" : "private");
       return;
     case SNT_ITEM:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "<item repeat='%i'>\n", node->value.item.repeat_min);
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "<item repeat='%i'>\n", node->value.item.repeat_min);
       return;
     case SNT_UNRESOLVED_REF:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri);
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri.c_str());
       return;
     case SNT_REF:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id.c_str());
       return;
     case SNT_STRING:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "%s\n", node->value.string);
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "%s\n", node->value.str.c_str());
       return;
   }
 }
@@ -304,14 +175,10 @@ static void sn_log_node_close(struct srgs_node *node)
     case SNT_META:
     case SNT_METADATA:
     case SNT_ANY:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "</%s>\n", node->name);
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "</%s>\n", node->name.c_str());
       return;
     case SNT_UNRESOLVED_REF:
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "</ruleref (unresolved)>\n");
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "</ruleref (unresolved)>\n");
       return;
     case SNT_STRING:
       return;
@@ -324,10 +191,10 @@ static void sn_log_node_close(struct srgs_node *node)
  * @param type of node
  * @return the node
  */
-static struct srgs_node *sn_new(const char *name, enum srgs_node_type type)
+static struct srgs_node *sn_new(const std::string &name, enum srgs_node_type type)
 {
-  struct srgs_node *node = (struct srgs_node *) malloc(sizeof(srgs_node));
-  node->name = strdup(name);
+  struct srgs_node *node = new srgs_node;
+  node->name = name;
   node->type = type;
   return node;
 }
@@ -346,15 +213,14 @@ static struct srgs_node *sn_find_last_sibling(struct srgs_node *node)
 
 /**
  * Add child node
- * @param pool to use
  * @param parent node to add child to
  * @param name the child node name
  * @param type the child node type
  * @return the child node
  */
-static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node *parent, const char *name, enum srgs_node_type type)
+static struct srgs_node *sn_insert(struct srgs_node *parent, const std::string &name, enum srgs_node_type type)
 {
-  struct srgs_node *sibling = parent ? sn_find_last_sibling(parent->child) : NULL;
+  struct srgs_node *sibling = parent ? sn_find_last_sibling(parent->child) : 0;
   struct srgs_node *child = sn_new(name, type);
   if (parent) {
     parent->num_children++;
@@ -370,15 +236,14 @@ static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node 
 
 /**
  * Add string child node
- * @param pool to use
  * @param parent node to add string to
- * @param string to add - this function does not copy the string
+ * @param str string to add - this function does not copy the string
  * @return the string child node
  */
-static struct srgs_node *sn_insert_string(switch_memory_pool_t *pool, struct srgs_node *parent, char *string)
+static srgs_node *sn_insert_string(struct srgs_node *parent, const std::string &str)
 {
-  struct srgs_node *child = sn_insert(pool, parent, string, SNT_STRING);
-  child->value.string = string;
+  srgs_node *child = sn_insert(parent, str, SNT_STRING);
+  child->value.str = str;
   return child;
 }
 
@@ -390,15 +255,14 @@ static struct srgs_node *sn_insert_string(switch_memory_pool_t *pool, struct srg
  * @param children_tags comma-separated list of valid child tag names
  * @return the definition
  */
-static struct tag_def *add_tag_def(const char *tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const char *children_tags)
+static tag_definition *add_tag_def(const std::string &tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const std::string &children_tags)
 {
-  struct tag_def *def = switch_core_alloc(globals.pool, sizeof(*def));
-  if (!cspeech_zstr(children_tags)) {
-    std::string tags_string(children_tags);
-    std::stringstream ss(tags_string);
+  tag_definition *def = new tag_definition;
+  if (children_tags != "") {
+    std::stringstream ss(children_tags);
     std::string item;
     while (std::getline(ss, item, ',')) {
-      def->children_tags[item.c_str()] = item.c_str();
+      def->children_tags[item] = item;
     }
   }
   def->attribs_fn = attribs_fn;
@@ -416,9 +280,9 @@ static struct tag_def *add_tag_def(const char *tag, tag_attribs_fn attribs_fn, t
  * @param children_tags comma-separated list of valid child tag names
  * @return the definition
  */
-static struct tag_def *add_root_tag_def(const char *tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const char *children_tags)
+static struct tag_definition *add_root_tag_def(const std::string &tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const std::string &children_tags)
 {
-  struct tag_def *def = add_tag_def(tag, attribs_fn, cdata_fn, children_tags);
+  tag_definition *def = add_tag_def(tag, attribs_fn, cdata_fn, children_tags);
   def->is_root = true;
   return def;
 }
@@ -433,28 +297,22 @@ static struct tag_def *add_root_tag_def(const char *tag, tag_attribs_fn attribs_
 static int process_tag(struct srgs_grammar *grammar, const char *name, char **atts)
 {
   struct srgs_node *cur = grammar->cur;
-  if (cur->tag_def->is_root && cur->parent == NULL) {
+  if (cur->tag_def->is_root && cur->parent == 0) {
     /* no parent for ROOT tags */
     return cur->tag_def->attribs_fn(grammar, atts);
   } else if (!cur->tag_def->is_root && cur->parent) {
     /* check if this child is allowed by parent node */
-    struct tag_def *parent_def = cur->parent->tag_def;
+    tag_definition *parent_def = cur->parent->tag_def;
     if (parent_def->children_tags.count("ANY") > 0 ||
       parent_def->children_tags.count(name) > 0) {
       return cur->tag_def->attribs_fn(grammar, atts);
     } else {
-      if(globals.logging_callback) {
-        globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<%s> cannot be a child of <%s>\n", name, cur->parent->name);
-      }
+      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<%s> cannot be a child of <%s>\n", name, cur->parent->name.c_str());
     }
-  } else if (cur->tag_def->is_root && cur->parent != NULL) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<%s> must be the root element\n", name);
-    }
+  } else if (cur->tag_def->is_root && cur->parent != 0) {
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<%s> must be the root element\n", name);
   } else {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<%s> cannot be a root element\n", name);
-    }
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<%s> cannot be a root element\n", name);
   }
   return IKS_BADXML;
 }
@@ -474,10 +332,9 @@ static int process_attribs_ignore(struct srgs_grammar *grammar, char **atts)
  * Handle CDATA that is ignored
  * @param grammar the grammar
  * @param data the CDATA
- * @param len the CDATA length
  * @return IKS_OK
  */
-static int process_cdata_ignore(struct srgs_grammar *grammar, char *data, size_t len)
+static int process_cdata_ignore(struct srgs_grammar *grammar, const std::string &data)
 {
   return IKS_OK;
 }
@@ -486,17 +343,14 @@ static int process_cdata_ignore(struct srgs_grammar *grammar, char *data, size_t
  * Handle CDATA that is not allowed
  * @param grammar the grammar
  * @param data the CDATA
- * @param len the CDATA length
  * @return IKS_BADXML if any printable characters
  */
-static int process_cdata_bad(struct srgs_grammar *grammar, char *data, size_t len)
+static int process_cdata_bad(struct srgs_grammar *grammar, const std::string &data)
 {
   int i;
-  for (i = 0; i < len; i++) {
+  for (i = 0; i < data.size(); i++) {
     if (isgraph(data[i])) {
-      if(globals.logging_callback) {
-        globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Unexpected CDATA for <%s>\n", grammar->cur->name);
-      }
+      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Unexpected CDATA for <%s>\n", grammar->cur->name.c_str());
       return IKS_BADXML;
     }
   }
@@ -511,9 +365,9 @@ static int process_cdata_bad(struct srgs_grammar *grammar, char *data, size_t le
  */
 static int process_rule(struct srgs_grammar *grammar, char **atts)
 {
-  struct srgs_node *rule = grammar->cur;
+  srgs_node *rule = grammar->cur;
   rule->value.rule.is_public = 0;
-  rule->value.rule.id = NULL;
+  rule->value.rule.id = "";
   if (atts) {
     int i = 0;
     while (atts[i]) {
@@ -521,24 +375,20 @@ static int process_rule(struct srgs_grammar *grammar, char **atts)
         rule->value.rule.is_public = !cspeech_zstr(atts[i + 1]) && !strcmp("public", atts[i + 1]);
       } else if (!strcmp("id", atts[i])) {
         if (!cspeech_zstr(atts[i + 1])) {
-          rule->value.rule.id = strdup(atts[i + 1]);
+          rule->value.rule.id = std::string(atts[i + 1]);
         }
       }
       i += 2;
     }
   }
 
-  if (cspeech_zstr(rule->value.rule.id)) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Missing rule ID: %s\n", rule->value.rule.id);
-    }
+  if (rule->value.rule.id == "") {
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Missing rule ID: %s\n", rule->value.rule.id.c_str());
     return IKS_BADXML;
   }
 
   if (grammar->rules.count(rule->value.rule.id) > 0) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Duplicate rule ID: %s\n", rule->value.rule.id);
-    }
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Duplicate rule ID: %s\n", rule->value.rule.id.c_str());
     return IKS_BADXML;
   }
   grammar->rules[rule->value.rule.id] = rule;
@@ -552,28 +402,24 @@ static int process_rule(struct srgs_grammar *grammar, char **atts)
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_ruleref(struct srgs_grammar *grammar, char **atts)
+static int process_ruleref(srgs_grammar *grammar, char **atts)
 {
-  struct srgs_node *ruleref = grammar->cur;
+  srgs_node *ruleref = grammar->cur;
   if (atts) {
     int i = 0;
     while (atts[i]) {
       if (!strcmp("uri", atts[i])) {
         char *uri = atts[i + 1];
         if (cspeech_zstr(uri)) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Empty <ruleref> uri\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Empty <ruleref> uri\n");
           return IKS_BADXML;
         }
         /* only allow local reference */
         if (uri[0] != '#' || strlen(uri) < 2) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Only local rule refs allowed\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Only local rule refs allowed\n");
           return IKS_BADXML;
         }
-        ruleref->value.ref.uri = strdup(uri);
+        ruleref->value.ref.uri = std::string(uri);
         return IKS_OK;
       }
       i += 2;
@@ -590,10 +436,10 @@ static int process_ruleref(struct srgs_grammar *grammar, char **atts)
  */
 static int process_item(struct srgs_grammar *grammar, char **atts)
 {
-  struct srgs_node *item = grammar->cur;
+  srgs_node *item = grammar->cur;
   item->value.item.repeat_min = 1;
   item->value.item.repeat_max = 1;
-  item->value.item.weight = NULL;
+  item->value.item.weight = "";
   if (atts) {
     int i = 0;
     while (atts[i]) {
@@ -601,64 +447,52 @@ static int process_item(struct srgs_grammar *grammar, char **atts)
         /* repeats of 0 are not supported by this code */
         char *repeat = atts[i + 1];
         if (cspeech_zstr(repeat)) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Empty <item> repeat atribute\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Empty <item> repeat atribute\n");
           return IKS_BADXML;
         }
         if (cspeech_is_number(repeat)) {
           /* single number */
           int repeat_val = atoi(repeat);
           if (repeat_val < 1) {
-            if(globals.logging_callback) {
-              globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat must be >= 0\n");
-            }
+            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat must be >= 0\n");
             return IKS_BADXML;
           }
           item->value.item.repeat_min = repeat_val;
           item->value.item.repeat_max = repeat_val;
         } else {
           /* range */
-          char *min = strdup(repeat);
-          char *max = strchr(min, '-');
-          if (max) {
-            *max = '\0';
-            max++;
+          std::string min = repeat;
+          std::string max;
+          std::string::size_type max_pos = min.find("-");
+          if (max_pos != std::string::npos) {
+            max = min.substr(max_pos + 1);
           } else {
-            if(globals.logging_callback) {
-              globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat must be a number or range\n");
-            }
+            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat must be a number or range\n");
             return IKS_BADXML;
           }
-          if (cspeech_is_number(min) && (cspeech_is_number(max) || cspeech_zstr(max))) {
-            int min_val = atoi(min);
-            int max_val = cspeech_zstr(max) ? INT_MAX : atoi(max);
+          if (cspeech_is_number(min) && (cspeech_is_number(max) || max == "")) {
+            int min_val = atoi(min.c_str());
+            int max_val = max == "" ? INT_MAX : atoi(max.c_str());
             /* max must be >= min and > 0
                min must be >= 0 */
             if ((max_val <= 0) || (max_val < min_val) || (min_val < 0)) {
-              if(globals.logging_callback) {
-                globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat range invalid\n");
-              }
+              globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat range invalid\n");
               return IKS_BADXML;
             }
             item->value.item.repeat_min = min_val;
             item->value.item.repeat_max = max_val;
           } else {
-            if(globals.logging_callback) {
-              globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat range is not a number\n");
-            }
+            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> repeat range is not a number\n");
             return IKS_BADXML;
           }
         }
       } else if (!strcmp("weight", atts[i])) {
         const char *weight = atts[i + 1];
         if (cspeech_zstr(weight) || !cspeech_is_number(weight) || atof(weight) < 0) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> weight is not a number >= 0\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<item> weight is not a number >= 0\n");
           return IKS_BADXML;
         }
-        item->value.item.weight = strdup(weight);
+        item->value.item.weight = std::string(weight);
       }
       i += 2;
     }
@@ -672,12 +506,10 @@ static int process_item(struct srgs_grammar *grammar, char **atts)
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_grammar(struct srgs_grammar *grammar, char **atts)
+static int process_grammar(srgs_grammar *grammar, char **atts)
 {
   if (grammar->root) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Only one <grammar> tag allowed\n");
-    }
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Only one <grammar> tag allowed\n");
     return IKS_BADXML;
   }
   grammar->root = grammar->cur;
@@ -687,39 +519,31 @@ static int process_grammar(struct srgs_grammar *grammar, char **atts)
       if (!strcmp("mode", atts[i])) {
         char *mode = atts[i + 1];
         if (cspeech_zstr(mode)) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> mode is missing\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> mode is missing\n");
           return IKS_BADXML;
         }
         grammar->digit_mode = !strcasecmp(mode, "dtmf");
-      } else if(!strcmp("encoding", atts[i])) {
+      } else if (!strcmp("encoding", atts[i])) {
         char *encoding = atts[i + 1];
         if (cspeech_zstr(encoding)) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> encoding is empty\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> encoding is empty\n");
           return IKS_BADXML;
         }
-        grammar->encoding = strdup(encoding);
+        grammar->encoding = std::string(encoding);
       } else if (!strcmp("language", atts[i])) {
         char *language = atts[i + 1];
         if (cspeech_zstr(language)) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> language is empty\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> language is empty\n");
           return IKS_BADXML;
         }
-        grammar->language = strdup(language);
+        grammar->language = std::string(language);
       } else if (!strcmp("root", atts[i])) {
         char *root = atts[i + 1];
         if (cspeech_zstr(root)) {
-          if(globals.logging_callback) {
-            globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> root is empty\n");
-          }
+          globals.logging_callback(grammar, CSPEECH_LOG_INFO, "<grammar> root is empty\n");
           return IKS_BADXML;
         }
-        grammar->cur->value.root = strdup(root);
+        grammar->cur->value.root = std::string(root);
       }
       i += 2;
     }
@@ -733,14 +557,17 @@ static int process_grammar(struct srgs_grammar *grammar, char **atts)
 static int tag_hook(void *user_data, char *name, char **atts, int type)
 {
   int result = IKS_OK;
-  struct srgs_grammar *grammar = (struct srgs_grammar *)user_data;
+  srgs_grammar *grammar = (srgs_grammar *)user_data;
 
   if (type == IKS_OPEN || type == IKS_SINGLE) {
-    enum srgs_node_type ntype = string_to_node_type(name);
+    srgs_node_type ntype = string_to_node_type(name);
     grammar->cur = sn_insert(grammar->cur, name, ntype);
-    grammar->cur->tag_def = globals.tag_defs[name];
-    if (!grammar->cur->tag_def) {
+    std::map<std::string, tag_definition *>::iterator i;
+    i = globals.tag_defs.find(name);
+    if (i == globals.tag_defs.end()) {
       grammar->cur->tag_def = globals.tag_defs["ANY"];
+    } else {
+      grammar->cur->tag_def = i->second;
     }
     result = process_tag(grammar, name, atts);
     sn_log_node_open(grammar->cur);
@@ -758,26 +585,15 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
  * Process <tag> CDATA
  * @param grammar the grammar
  * @param data the CDATA
- * @param len the CDATA length
  * @return IKS_OK
  */
-static int process_cdata_tag(struct srgs_grammar *grammar, char *data, size_t len)
+static int process_cdata_tag(srgs_grammar *grammar, const std::string &data)
 {
-  struct srgs_node *item = grammar->cur->parent;
-  if (item && item->type == SNT_ITEM) {
-    if (grammar->tag_count < MAX_TAGS) {
-      /* grammar gets the tag name, item gets the unique tag number */
-      char *tag = (char *)malloc(sizeof(char) * (len + 1));
-      tag[len] = '\0';
-      strncpy(tag, data, len);
-      grammar->tags[++grammar->tag_count] = tag;
-      item->value.item.tag = grammar->tag_count;
-    } else {
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_WARNING, "too many <tag>s\n");
-      }
-      return IKS_BADXML;
-    }
+  srgs_node *item = grammar->cur->parent;
+  if (item && item->type == SNT_ITEM && data != "") {
+    /* grammar gets the tag name, item gets the unique tag number */
+	grammar->tags.push_back(data);
+    item->value.item.tag = grammar->tags.size();
   }
   return IKS_OK;
 }
@@ -786,39 +602,25 @@ static int process_cdata_tag(struct srgs_grammar *grammar, char *data, size_t le
  * Process CDATA grammar tokens
  * @param grammar the grammar
  * @param data the CDATA
- * @param len the CDATA length
  * @return IKS_OK
  */
-static int process_cdata_tokens(struct srgs_grammar *grammar, char *data, size_t len)
+static int process_cdata_tokens(srgs_grammar *grammar, const std::string &data)
 {
-  struct srgs_node *string = grammar->cur;
-  int i;
+  srgs_node *string_node = grammar->cur;
   if (grammar->digit_mode) {
-    for (i = 0; i < len; i++) {
+    for (int i = 0; i < data.size(); i++) {
       if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
-        char *digit = (char *)malloc(sizeof(char) * 2);
-        digit[0] = data[i];
-        digit[1] = '\0';
-        string = sn_insert_string(string, digit);
-        sn_log_node_open(string);
+        string_node = sn_insert_string(string_node, data.substr(i, 1));
+        sn_log_node_open(string_node);
       }
     }
   } else {
-    char *data_dup = (char *)malloc(sizeof(char) * (len + 1));
-    char *start = data_dup;
-    char *end = start + len - 1;
-    memcpy(data_dup, data, len);
-    /* remove start whitespace */
-    for (; start && *start && !isgraph(*start); start++) {
-    }
-    if (!cspeech_zstr(start)) {
-      /* remove end whitespace */
-      for (; end != start && *end && !isgraph(*end); end--) {
-        *end = '\0';
-      }
-      if (!cspeech_zstr(start)) {
-        string = sn_insert_string(string, start);
-      }
+    std::string data_dup = data;
+    std::string::size_type begin = data_dup.find_first_not_of(" \t");
+    std::string::size_type end = data_dup.find_last_not_of(" \t");
+    if (begin != std::string::npos && begin != end) {
+      data_dup = data_dup.substr(begin, end);
+      string_node = sn_insert_string(string_node, data_dup);
     }
   }
   return IKS_OK;
@@ -833,20 +635,16 @@ static int process_cdata_tokens(struct srgs_grammar *grammar, char *data, size_t
  */
 static int cdata_hook(void *user_data, char *data, size_t len)
 {
-  struct srgs_grammar *grammar = (struct srgs_grammar *)user_data;
+  srgs_grammar *grammar = (srgs_grammar *)user_data;
   if (!grammar) {
-    if(globals.logging_callback) {
-      globals.logging_callback(NULL, CSPEECH_LOG_INFO, "Missing grammar\n");
-    }
+    globals.logging_callback(0, CSPEECH_LOG_INFO, "Missing grammar\n");
     return IKS_BADXML;
   }
-  if (grammar->cur) {
+  if (grammar->cur && data && len) {
     if (grammar->cur->tag_def) {
-      return grammar->cur->tag_def->cdata_fn(grammar, data, len);
+      return grammar->cur->tag_def->cdata_fn(grammar, std::string(data, len));
     }
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Missing definition for <%s>\n", grammar->cur->name);
-    }
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Missing definition for <%s>\n", grammar->cur->name.c_str());
     return IKS_BADXML;
   }
   return IKS_OK;
@@ -855,158 +653,114 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 /**
  * Create a new parsed grammar
  * @param parser
- * @return the grammar
  */
-struct srgs_grammar *srgs_grammar_new(struct srgs_parser *parser)
+srgs_grammar::srgs_grammar(const std::string &uuid) : 
+  uuid(uuid),
+  root(0),
+  cur(0)
 {
-  switch_memory_pool_t *pool = NULL;
-  struct srgs_grammar *grammar = NULL;
-  switch_core_new_memory_pool(&pool);
-  grammar = switch_core_alloc(pool, sizeof (*grammar));
-  grammar->root = NULL;
-  grammar->cur = NULL;
-  grammar->uuid = (parser && !cspeech_zstr(parser->uuid)) ? switch_core_strdup(pool, parser->uuid) : "";
-  switch_mutex_init(&grammar->mutex, SWITCH_MUTEX_NESTED, pool);
-  return grammar;
 }
 
 /**
- * Destroy a parsed grammar
- * @param grammar the grammar
+ * Grammar destructor
  */
-static void srgs_grammar_destroy(struct srgs_grammar *grammar)
-{
-  if (grammar->compiled_regex) {
-    pcre_free(grammar->compiled_regex);
+srgs_grammar::~srgs_grammar() {
+  if (compiled_regex) {
+    pcre_free(compiled_regex);
   }
-  if (grammar->jsgf_file_name) {
-    switch_file_remove(grammar->jsgf_file_name, pool);
+  if (jsgf_file_name != "") {
+	unlink(jsgf_file_name.c_str());
   }
 }
 
 /**
  * Create a new parser.
  * @param uuid optional uuid for logging
- * @return the created parser
  */
-struct srgs_parser *srgs_parser_new(const char *uuid)
+srgs_parser::srgs_parser(const std::string &uuid) : 
+  uuid(uuid)
 {
-  switch_memory_pool_t *pool = NULL;
-  struct srgs_parser *parser = NULL;
-  switch_core_new_memory_pool(&pool);
-  if (pool) {
-    parser = switch_core_alloc(pool, sizeof(*parser));
-    parser->pool = pool;
-    parser->uuid = cspeech_zstr(uuid) ? "" : switch_core_strdup(pool, uuid);
-    switch_core_hash_init(&parser->cache, pool);
-    switch_mutex_init(&parser->mutex, SWITCH_MUTEX_NESTED, pool);
-  }
-  return parser;
+  //switch_mutex_init(&parser->mutex, SWITCH_MUTEX_NESTED);
 }
 
 /**
  * Destroy the parser.
- * @param parser to destroy
  */
-void srgs_parser_destroy(struct srgs_parser *parser)
+srgs_parser::~srgs_parser()
 {
-  switch_memory_pool_t *pool = parser->pool;
-  switch_hash_index_t *hi = NULL;
-
-  /* clean up all cached grammars */
-  for (hi = switch_core_hash_first(parser->cache); hi; hi = switch_core_hash_next(hi)) {
-    struct srgs_grammar *grammar = NULL;
-    const void *key;
-    void *val;
-    switch_core_hash_this(hi, &key, NULL, &val);
-    grammar = (struct srgs_grammar *)val;
-    switch_assert(grammar);
-    srgs_grammar_destroy(grammar);
-  }
-  switch_core_destroy_memory_pool(&pool);
 }
 
 /**
  * Create regexes
  * @param grammar the grammar
  * @param node root node
- * @param stream set to NULL
  * @return 1 if successful
  */
-static int create_regexes(struct srgs_grammar *grammar, struct srgs_node *node, switch_stream_handle_t *stream)
+static int create_regexes(srgs_grammar *grammar, srgs_node *node, std::stringstream &stream)
 {
   sn_log_node_open(node);
   switch (node->type) {
     case SNT_GRAMMAR:
       if (node->child) {
         int num_rules = 0;
-        struct srgs_node *child = node->child;
+        srgs_node *child = node->child;
         if (grammar->root_rule) {
-          if (!create_regexes(grammar, grammar->root_rule, NULL)) {
+          std::stringstream new_stream;
+          if (!create_regexes(grammar, grammar->root_rule, new_stream)) {
             return 0;
           }
-          grammar->regex = switch_core_sprintf(grammar->pool, "^%s$", grammar->root_rule->value.rule.regex);
+          grammar->regex = "^";
+          grammar->regex += grammar->root_rule->value.rule.regex;
+          grammar->regex += "$";
         } else {
-          switch_stream_handle_t new_stream = { 0 };
-          SWITCH_STANDARD_STREAM(new_stream);
+          std::stringstream new_stream;
           if (node->num_children > 1) {
-            new_stream.write_function(&new_stream, "%s", "^(?:");
+            new_stream << "^(?:";
           } else {
-            new_stream.write_function(&new_stream, "%s", "^");
+            new_stream << "^";
           }
           for (; child; child = child->next) {
-            if (!create_regexes(grammar, child, &new_stream)) {
-              switch_safe_free(new_stream.data);
+            if (!create_regexes(grammar, child, new_stream)) {
               return 0;
             }
             if (child->type == SNT_RULE && child->value.rule.is_public) {
               if (num_rules > 0) {
-                new_stream.write_function(&new_stream, "%s", "|");
+                new_stream << "|";
               }
-              new_stream.write_function(&new_stream, "%s", child->value.rule.regex);
+              new_stream << child->value.rule.regex;
               num_rules++;
             }
           }
           if (node->num_children > 1) {
-            new_stream.write_function(&new_stream, "%s", ")$");
+            new_stream << ")$";
           } else {
-            new_stream.write_function(&new_stream, "%s", "$");
+            new_stream << "$";
           }
-          grammar->regex = strdup(new_stream.data);
-          switch_safe_free(new_stream.data);
+          grammar->regex = new_stream.str();
         }
-        if(globals.logging_callback) {
-          globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "document regex = %s\n", grammar->regex);
-        }
+        globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "document regex = %s\n", grammar->regex.c_str());
       }
       break;
     case SNT_RULE:
-      if (node->value.rule.regex) {
+      if (node->value.rule.regex != "") {
         return 1;
       } else if (node->child) {
-        struct srgs_node *item = node->child;
-        switch_stream_handle_t new_stream = { 0 };
-        SWITCH_STANDARD_STREAM(new_stream);
+        srgs_node *item = node->child;
+        std::stringstream new_stream;
         for (; item; item = item->next) {
-          if (!create_regexes(grammar, item, &new_stream)) {
-            if(globals.logging_callback) {
-              globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "%s regex failed = %s\n", node->value.rule.id, node->value.rule.regex);
-            }
-            switch_safe_free(new_stream.data);
+          if (!create_regexes(grammar, item, new_stream)) {
+            globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "%s regex failed = %s\n", node->value.rule.id.c_str(), node->value.rule.regex.c_str());
             return 0;
           }
         }
-        node->value.rule.regex = strdup(new_stream.data);
-        if(globals.logging_callback) {
-          globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "%s regex = %s\n", node->value.rule.id, node->value.rule.regex);
-        }
-        switch_safe_free(new_stream.data);
+        node->value.rule.regex = new_stream.str();
+        globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "%s regex = %s\n", node->value.rule.id.c_str(), node->value.rule.regex.c_str());
       }
       break;
     case SNT_STRING: {
       int i;
-      for (i = 0; i < strlen(node->value.string); i++) {
-        switch (node->value.string[i]) {
+      for (i = 0; i < node->value.str.length(); i++) {
+        switch (node->value.str[i]) {
           case '[':
           case '\\':
           case '^':
@@ -1019,10 +773,11 @@ static int create_regexes(struct srgs_grammar *grammar, struct srgs_node *node, 
           case '(':
           case ')':
             /* escape special PCRE regex characters */
-            stream->write_function(stream, "\\%c", node->value.string[i]);
+            stream << "\\";
+            stream.put(node->value.str[i]);
             break;
           default:
-            stream->write_function(stream, "%c", node->value.string[i]);
+            stream.put(node->value.str[i]);
             break;
         }
       }
@@ -1035,12 +790,12 @@ static int create_regexes(struct srgs_grammar *grammar, struct srgs_node *node, 
     }
     case SNT_ITEM:
       if (node->child) {
-        struct srgs_node *item = node->child;
+        srgs_node *item = node->child;
         if (node->value.item.repeat_min != 1 || node->value.item.repeat_max != 1 || node->value.item.tag) {
           if (node->value.item.tag) {
-            stream->write_function(stream, "(?P<%d>", node->value.item.tag);
+            stream << "(?P<" << node->value.item.tag << ">";
           } else {
-            stream->write_function(stream, "%s", "(?:");
+            stream << "(?:";
           }
         }
         for(; item; item = item->next) {
@@ -1051,57 +806,53 @@ static int create_regexes(struct srgs_grammar *grammar, struct srgs_node *node, 
         if (node->value.item.repeat_min != 1 || node->value.item.repeat_max != 1) {
           if (node->value.item.repeat_min != node->value.item.repeat_max) {
             if (node->value.item.repeat_min == 0 && node->value.item.repeat_max == INT_MAX) {
-                stream->write_function(stream, ")*");
+              stream << ")*";
             } else if (node->value.item.repeat_min == 0 && node->value.item.repeat_max == 1) {
-                stream->write_function(stream, ")?");
+              stream << ")?";
             } else if (node->value.item.repeat_min == 1 && node->value.item.repeat_max == INT_MAX) {
-              stream->write_function(stream, ")+");
+              stream << ")+";
             } else if (node->value.item.repeat_max == INT_MAX) {
-              stream->write_function(stream, "){%i,1000}", node->value.item.repeat_min);
+              stream << "){" << node->value.item.repeat_min << ",1000}";
             } else {
-              stream->write_function(stream, "){%i,%i}", node->value.item.repeat_min, node->value.item.repeat_max);
+              stream << "){" << node->value.item.repeat_min << "," << node->value.item.repeat_max << "}";
             }
           } else {
-            stream->write_function(stream, "){%i}", node->value.item.repeat_min);
+            stream << "){" << node->value.item.repeat_min << "}";
           }
         } else if (node->value.item.tag) {
-          stream->write_function(stream, "%s", ")");
+          stream << ")";
         }
       }
       break;
     case SNT_ONE_OF:
       if (node->child) {
-        struct srgs_node *item = node->child;
+        srgs_node *item = node->child;
         if (node->num_children > 1) {
-          stream->write_function(stream, "%s", "(?:");
+          stream << "(?:";
         }
         for (; item; item = item->next) {
           if (item != node->child) {
-            stream->write_function(stream, "%s", "|");
+            stream << "|";
           }
           if (!create_regexes(grammar, item, stream)) {
             return 0;
           }
         }
         if (node->num_children > 1) {
-          stream->write_function(stream, "%s", ")");
+          stream << ")";
         }
       }
       break;
     case SNT_REF: {
-      struct srgs_node *rule = node->value.ref.node;
-      if (!rule->value.rule.regex) {
-        if(globals.logging_callback) {
-          globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "ruleref: create %s regex\n", rule->value.rule.id);
-        }
-        if (!create_regexes(grammar, rule, NULL)) {
+      srgs_node *rule = node->value.ref.node;
+      if (rule->value.rule.regex == "") {
+        std::stringstream new_stream;
+        globals.logging_callback(grammar, CSPEECH_LOG_DEBUG, "ruleref: create %s regex\n", rule->value.rule.id.c_str());
+        if (!create_regexes(grammar, rule, new_stream)) {
           return 0;
         }
       }
-      if (!rule->value.rule.regex) {
-        return 0;
-      }
-      stream->write_function(stream, "%s", rule->value.rule.regex);
+      stream << rule->value.rule.regex;
       break;
     }
     case SNT_ANY:
@@ -1116,30 +867,22 @@ static int create_regexes(struct srgs_grammar *grammar, struct srgs_node *node, 
 /**
  * Compile regex
  */
-static pcre *get_compiled_regex(struct srgs_grammar *grammar)
+pcre *srgs_grammar::get_compiled_regex(void)
 {
   int erroffset = 0;
   const char *errptr = "";
   int options = 0;
-  const char *regex;
+  std::string regex;
 
-  if (!grammar) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_CRIT, "grammar is NULL!\n");
-    }
-    return NULL;
-  }
-
-  switch_mutex_lock(grammar->mutex);
-  if (!grammar->compiled_regex && (regex = srgs_grammar_to_regex(grammar))) {
-    if (!(grammar->compiled_regex = pcre_compile(regex, options, &errptr, &erroffset, NULL))) {
-      if(globals.logging_callback) {
-        globals.logging_callback(grammar, CSPEECH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex);
-      }
+  //switch_mutex_lock(grammar->mutex);
+  if (!compiled_regex) {
+	regex = to_regex();
+    if (regex != "" && !(compiled_regex = pcre_compile(regex.c_str(), options, &errptr, &erroffset, NULL))) {
+      globals.logging_callback(this, CSPEECH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex.c_str());
     }
   }
-  switch_mutex_unlock(grammar->mutex);
-  return grammar->compiled_regex;
+  //switch_mutex_unlock(grammar->mutex);
+  return compiled_regex;
 }
 
 /**
@@ -1148,48 +891,42 @@ static pcre *get_compiled_regex(struct srgs_grammar *grammar)
  * @param node the current node
  * @param level the recursion level
  */
-static int resolve_refs(struct srgs_grammar *grammar, struct srgs_node *node, int level)
+static int resolve_refs(srgs_grammar *grammar, srgs_node *node, int level)
 {
   sn_log_node_open(node);
   if (node->visited) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Loop detected.\n");
-    }
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Loop detected.\n");
     return 0;
   }
   node->visited = 1;
 
   if (level > MAX_RECURSION) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Recursion too deep.\n");
-    }
+    globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Recursion too deep.\n");
     return 0;
   }
 
-  if (node->type == SNT_GRAMMAR && node->value.root) {
-    struct srgs_node *rule = (struct srgs_node *)grammar->rules[node->value.root];
-    if (!rule) {
-      if(globals.logging_callback) {
-        globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Root rule not found: %s\n", node->value.root);
-      }
+  if (node->type == SNT_GRAMMAR && node->value.root == "") {
+    std::map<std::string, srgs_node *>::iterator i;
+    i = grammar->rules.find(node->value.root);
+    if (i == grammar->rules.end()) {
+      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Root rule not found: %s\n", node->value.root.c_str());
       return 0;
     }
-    grammar->root_rule = rule;
+    grammar->root_rule = i->second;
   }
 
   if (node->type == SNT_UNRESOLVED_REF) {
     /* resolve reference to local rule- drop first character # from URI */
-    struct srgs_node *rule = (struct srgs_node *)grammar->rules[node->value.ref.uri + 1];
-    if (!rule) {
-      if(globals.logging_callback) {
-        globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Local rule not found: %s\n", node->value.ref.uri);
-      }
+    std::map<std::string, srgs_node *>::iterator i;
+    i = grammar->rules.find(node->value.ref.uri.substr(1));
+    if (i == grammar->rules.end()) {
+      globals.logging_callback(grammar, CSPEECH_LOG_INFO, "Local rule not found: %s\n", node->value.ref.uri.c_str());
       return 0;
     }
 
     /* link to rule */
     node->type = SNT_REF;
-    node->value.ref.node = rule;
+    node->value.ref.node = i->second;
   }
 
   /* travel through rule to detect loops */
@@ -1201,7 +938,7 @@ static int resolve_refs(struct srgs_grammar *grammar, struct srgs_node *node, in
 
   /* resolve children refs */
   if (node->child) {
-    struct srgs_node *child = node->child;
+    srgs_node *child = node->child;
     for (; child; child = child->next) {
       if (!resolve_refs(grammar, child, level + 1)) {
         return 0;
@@ -1216,74 +953,58 @@ static int resolve_refs(struct srgs_grammar *grammar, struct srgs_node *node, in
 
 /**
  * Parse the document into rules to match
- * @param parser the parser
  * @param document the document to parse
  * @return the parsed grammar if successful
  */
-struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document)
+srgs_grammar *srgs_parser::parse(const std::string &document)
 {
-  struct srgs_grammar *grammar = NULL;
-  if (!parser) {
-    if(globals.logging_callback) {
-      globals.logging_callback(NULL, CSPEECH_LOG_CRIT, "NULL parser!!\n");
-    }
-    return NULL;
-  }
+  srgs_grammar *grammar = 0;
 
-  if (cspeech_zstr(document)) {
-    if(globals.logging_callback) {
-      globals.logging_callback(parser, CSPEECH_LOG_INFO, "Missing grammar document\n");
-    }
-    return NULL;
+  if (document == "") {
+    globals.logging_callback(this, CSPEECH_LOG_INFO, "Missing grammar document\n");
+    return 0;
   }
 
   /* check for cached grammar */
-  switch_mutex_lock(parser->mutex);
-  grammar = (struct srgs_grammar *)switch_core_hash_find(parser->cache, document);
-  if (!grammar) {
+  //switch_mutex_lock(parser->mutex);
+  std::map<std::string, srgs_grammar *>::iterator i = cache.find(document);
+  if (i == cache.end()) {
     int result = 0;
     iksparser *p;
-    if(globals.logging_callback) {
-      globals.logging_callback(parser, CSPEECH_LOG_DEBUG, "Parsing new grammar\n");
-    }
-    grammar = srgs_grammar_new(parser);
+    globals.logging_callback(this, CSPEECH_LOG_DEBUG, "Parsing new grammar\n");
+    grammar = new srgs_grammar(uuid);
     p = iks_sax_new(grammar, tag_hook, cdata_hook);
-    if (iks_parse(p, document, 0, 1) == IKS_OK) {
+    if (iks_parse(p, document.c_str(), 0, 1) == IKS_OK) {
       if (grammar->root) {
-        if(globals.logging_callback) {
-          globals.logging_callback(parser, CSPEECH_LOG_DEBUG, "Resolving references\n");
-        }
+        globals.logging_callback(this, CSPEECH_LOG_DEBUG, "Resolving references\n");
         if (resolve_refs(grammar, grammar->root, 0)) {
           result = 1;
         }
       } else {
-        if(globals.logging_callback) {
-          globals.logging_callback(parser, CSPEECH_LOG_INFO, "Nothing to parse!\n");
-        }
+        globals.logging_callback(this, CSPEECH_LOG_INFO, "Nothing to parse!\n");
       }
     }
     iks_parser_delete(p);
     if (result) {
-      switch_core_hash_insert(parser->cache, document, grammar);
+      cache[document] = grammar;
     } else {
       if (grammar) {
-        srgs_grammar_destroy(grammar);
-        grammar = NULL;
+        delete grammar;
+        grammar = 0;
       }
-      if(globals.logging_callback) {
-        globals.logging_callback(parser, CSPEECH_LOG_INFO, "Failed to parse grammar\n");
-      }
+      globals.logging_callback(this, CSPEECH_LOG_INFO, "Failed to parse grammar\n");
     }
   } else {
-    if(globals.logging_callback) {
-      globals.logging_callback(parser, CSPEECH_LOG_DEBUG, "Using cached grammar\n");
-    }
+    globals.logging_callback(this, CSPEECH_LOG_DEBUG, "Using cached grammar\n");
+	grammar = i->second;
   }
-  switch_mutex_unlock(parser->mutex);
+  //switch_mutex_unlock(parser->mutex);
 
   return grammar;
 }
 
+/* TODO - add MAX_TAGS check back... */
+#define MAX_TAGS 30
 #define MAX_INPUT_SIZE 128
 #define OVECTOR_SIZE MAX_TAGS
 #define WORKSPACE_SIZE 1024
@@ -1294,10 +1015,10 @@ struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document
  * @param input the input to check
  * @return true if end of match (no more input can be added)
  */
-static int is_match_end(pcre *compiled_regex, const char *input)
+static int is_match_end(pcre *compiled_regex, const std::string &input)
 {
   int ovector[OVECTOR_SIZE];
-  int input_size = strlen(input);
+  int input_size = input.size();
   char search_input[MAX_INPUT_SIZE + 2];
   const char *search_set = "0123456789#*ABCD";
   const char *search = strchr(search_set, input[input_size - 1]); /* start with last digit in input */
@@ -1306,7 +1027,7 @@ static int is_match_end(pcre *compiled_regex, const char *input)
   /* For each digit in search_set, check if input + search_set digit is a potential match.
      If so, then this is not a match end.
    */
-  sprintf(search_input, "%sZ", input);
+  sprintf(search_input, "%sZ", input.c_str());
   for (i = 0; i < 16; i++) {
     int result;
     if (!*search) {
@@ -1316,15 +1037,11 @@ static int is_match_end(pcre *compiled_regex, const char *input)
     result = pcre_exec(compiled_regex, NULL, search_input, input_size + 1, 0, 0,
       ovector, sizeof(ovector) / sizeof(ovector[0]));
     if (result > 0) {
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "not match end\n");
-      }
+      globals.logging_callback(0, CSPEECH_LOG_DEBUG, "not match end\n");
       return 0;
     }
   }
-  if(globals.logging_callback) {
-    globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "is match end\n");
-  }
+  globals.logging_callback(0, CSPEECH_LOG_DEBUG, "is match end\n");
   return 1;
 }
 
@@ -1335,45 +1052,41 @@ static int is_match_end(pcre *compiled_regex, const char *input)
  * @param interpretation the (optional) interpretation of the input result
  * @return the match result
  */
-enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char *input, const char **interpretation)
+srgs_match_type srgs_grammar::match(const std::string &input, std::string &interpretation)
 {
   int result = 0;
   int ovector[OVECTOR_SIZE];
   pcre *compiled_regex;
 
-  *interpretation = NULL;
+  interpretation = "";
 
-  if (cspeech_zstr(input)) {
+  if (input == "") {
     return SMT_NO_MATCH;
   }
-  if (strlen(input) > MAX_INPUT_SIZE) {
-    if(globals.logging_callback) {
-      globals.logging_callback(NULL, CSPEECH_LOG_WARNING, "input too large: %s\n", input);
-    }
+  if (input.length() > MAX_INPUT_SIZE) {
+    globals.logging_callback(NULL, CSPEECH_LOG_WARNING, "input too large: %s\n", input.c_str());
     return SMT_NO_MATCH;
   }
 
-  if (!(compiled_regex = get_compiled_regex(grammar))) {
+  if (!(compiled_regex = get_compiled_regex())) {
     return SMT_NO_MATCH;
   }
-  result = pcre_exec(compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
+  result = pcre_exec(compiled_regex, NULL, input.c_str(), input.length(), 0, PCRE_PARTIAL,
     ovector, OVECTOR_SIZE);
 
-  if(globals.logging_callback) {
-    globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "match = %i\n", result);
-  }
+  globals.logging_callback(0, CSPEECH_LOG_DEBUG, "match = %i\n", result);
   if (result > 0) {
     int i;
     char buffer[MAX_INPUT_SIZE + 1];
     buffer[MAX_INPUT_SIZE] = '\0';
 
     /* find matching instance... */
-    for (i = 1; i <= grammar->tag_count; i++) {
+    for (i = 1; i <= tags.size(); i++) {
       char substring_name[16] = { 0 };
       buffer[0] = '\0';
       snprintf(substring_name, 16, "%d", i);
-      if (pcre_copy_named_substring(compiled_regex, input, ovector, result, substring_name, buffer, MAX_INPUT_SIZE) != PCRE_ERROR_NOSUBSTRING && !zstr_buf(buffer)) {
-        *interpretation = grammar->tags[i];
+      if (pcre_copy_named_substring(compiled_regex, input.c_str(), ovector, result, substring_name, buffer, MAX_INPUT_SIZE) != PCRE_ERROR_NOSUBSTRING && buffer[0]) {
+        interpretation = tags[i - 1];
         break;
       }
     }
@@ -1393,23 +1106,19 @@ enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char
 /**
  * Generate regex from SRGS document.  Call this after parsing SRGS document.
  * @param parser the parser
- * @return the regex or NULL
+ * @return the regex
  */
-const char *srgs_grammar_to_regex(struct srgs_grammar *grammar)
+const std::string &srgs_grammar::to_regex(void)
 {
-  if (!grammar) {
-    if(globals.logging_callback) {
-      globals.logging_callback(NULL, CSPEECH_LOG_INFO, "grammar is NULL!\n");
-    }
-    return NULL;
+  static std::string nil_regex = "";
+  //switch_mutex_lock(grammar->mutex);
+  std::stringstream new_stream;
+  if (regex == "" && !create_regexes(this, root, new_stream)) {
+    //switch_mutex_unlock(grammar->mutex);
+    return nil_regex;
   }
-  switch_mutex_lock(grammar->mutex);
-  if (!grammar->regex && !create_regexes(grammar, grammar->root, NULL)) {
-    switch_mutex_unlock(grammar->mutex);
-    return NULL;
-  }
-  switch_mutex_unlock(grammar->mutex);
-  return grammar->regex;
+  //switch_mutex_unlock(grammar->mutex);
+  return regex;
 }
 
 /**
@@ -1419,32 +1128,29 @@ const char *srgs_grammar_to_regex(struct srgs_grammar *grammar)
  * @param stream set to NULL
  * @return 1 if successful
  */
-static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, switch_stream_handle_t *stream)
+static int create_jsgf(srgs_grammar *grammar, srgs_node *node, std::stringstream &stream)
 {
   sn_log_node_open(node);
   switch (node->type) {
     case SNT_GRAMMAR:
       if (node->child) {
-        struct srgs_node *child;
-        switch_stream_handle_t new_stream = { 0 };
-        SWITCH_STANDARD_STREAM(new_stream);
+        srgs_node *child;
+        std::stringstream new_stream;
 
-        new_stream.write_function(&new_stream, "#JSGF V1.0");
-        if (!cspeech_zstr(grammar->encoding)) {
-          new_stream.write_function(&new_stream, " %s", grammar->encoding);
-          if (!cspeech_zstr(grammar->language)) {
-            new_stream.write_function(&new_stream, " %s", grammar->language);
+        new_stream << "#JSGF V1.0";
+        if (grammar->encoding != "") {
+          new_stream << " " << grammar->encoding;
+          if (grammar->language != "") {
+            new_stream << " " << grammar->language;
           }
         }
 
-        new_stream.write_function(&new_stream,
-          ";\ngrammar org.freeswitch.srgs_to_jsgf;\n"
-          "public ");
+        new_stream << ";\ngrammar org.freeswitch.srgs_to_jsgf;\n"
+                   << "public ";
 
         /* output root rule */
         if (grammar->root_rule) {
-          if (!create_jsgf(grammar, grammar->root_rule, &new_stream)) {
-            switch_safe_free(new_stream.data);
+          if (!create_jsgf(grammar, grammar->root_rule, new_stream)) {
             return 0;
           }
         } else {
@@ -1458,23 +1164,22 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
           }
 
           if (num_rules > 1) {
-            new_stream.write_function(&new_stream, "<root> =");
+            new_stream << "<root> =";
             for (child = node->child; child; child = child->next) {
               if (child->type == SNT_RULE && child->value.rule.is_public) {
                 if (!first) {
-                  new_stream.write_function(&new_stream, "%s", " |");
+                  new_stream << " |";
                 }
                 first = 0;
-                new_stream.write_function(&new_stream, " <%s>", child->value.rule.id);
+                new_stream << " <" << child->value.rule.id << ">";
               }
             }
-            new_stream.write_function(&new_stream, ";\n");
+            new_stream << ";\n";
           } else {
             for (child = node->child; child; child = child->next) {
               if (child->type == SNT_RULE && child->value.rule.is_public) {
                 grammar->root_rule = child;
-                if (!create_jsgf(grammar, child, &new_stream)) {
-                  switch_safe_free(new_stream.data);
+                if (!create_jsgf(grammar, child, new_stream)) {
                   return 0;
                 } else {
                   break;
@@ -1487,40 +1192,34 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
         /* output all rule definitions */
         for (child = node->child; child; child = child->next) {
           if (child->type == SNT_RULE && child != grammar->root_rule) {
-            if (!create_jsgf(grammar, child, &new_stream)) {
-              switch_safe_free(new_stream.data);
+            if (!create_jsgf(grammar, child, new_stream)) {
               return 0;
             }
           }
         }
-        grammar->jsgf = strdup(new_stream.data);
-        switch_safe_free(new_stream.data);
-        if(globals.logging_callback) {
-          globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "document jsgf = %s\n", grammar->jsgf);
-        }
+        grammar->jsgf = new_stream.str();
+        globals.logging_callback(0, CSPEECH_LOG_DEBUG, "document jsgf = %s\n", grammar->jsgf.c_str());
       }
       break;
     case SNT_RULE:
       if (node->child) {
-        struct srgs_node *item = node->child;
-        stream->write_function(stream, "<%s> =", node->value.rule.id);
+        srgs_node *item = node->child;
+        stream << "<" << node->value.rule.id << "> =";
         for (; item; item = item->next) {
           if (!create_jsgf(grammar, item, stream)) {
-            if(globals.logging_callback) {
-              globals.logging_callback(NULL, CSPEECH_LOG_DEBUG, "%s jsgf rule failed\n", node->value.rule.id);
-            }
+            globals.logging_callback(0, CSPEECH_LOG_DEBUG, "%s jsgf rule failed\n", node->value.rule.id.c_str());
             return 0;
           }
         }
-        stream->write_function(stream, ";\n");
+        stream << ";\n";
       }
       break;
     case SNT_STRING: {
-      int len = strlen(node->value.string);
+      int len = node->value.str.length();
       int i;
-      stream->write_function(stream, " ");
+      stream << " ";
       for (i = 0; i < len; i++) {
-        switch (node->value.string[i]) {
+        switch (node->value.str[i]) {
           case '\\':
           case '*':
           case '+':
@@ -1536,12 +1235,12 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
           case '>':
           case ';':
           case '|':
-            stream->write_function(stream, "\\");
+            stream << "\\";
             break;
           default:
             break;
         }
-        stream->write_function(stream, "%c", node->value.string[i]);
+        stream.put(node->value.str[i]);
       }
       if (node->child) {
         if (!create_jsgf(grammar, node->child, stream)) {
@@ -1552,22 +1251,22 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
     }
     case SNT_ITEM:
       if (node->child) {
-        struct srgs_node *item;
+        srgs_node *item;
         if (node->value.item.repeat_min == 0 && node->value.item.repeat_max == 1) {
           /* optional item */
-          stream->write_function(stream, " [");
+          stream << " [";
           for(item = node->child; item; item = item->next) {
             if (!create_jsgf(grammar, item, stream)) {
               return 0;
             }
           }
-          stream->write_function(stream, " ]");
+          stream << " ]";
         } else {
           /* minimum repeats */
           int i;
           for (i = 0; i < node->value.item.repeat_min; i++) {
             if (node->value.item.repeat_min != 1 && node->value.item.repeat_max != 1) {
-              stream->write_function(stream, " (");
+              stream << " (";
             }
             for(item = node->child; item; item = item->next) {
               if (!create_jsgf(grammar, item, stream)) {
@@ -1575,20 +1274,20 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
               }
             }
             if (node->value.item.repeat_min != 1 && node->value.item.repeat_max != 1) {
-              stream->write_function(stream, " )");
+              stream << " )";
             }
           }
           if (node->value.item.repeat_max == INT_MAX) {
-            stream->write_function(stream, "*");
+            stream << "*";
           } else {
             for (;i < node->value.item.repeat_max; i++) {
-              stream->write_function(stream, " [");
+              stream << " [";
               for(item = node->child; item; item = item->next) {
                 if (!create_jsgf(grammar, item, stream)) {
                   return 0;
                 }
               }
-              stream->write_function(stream, " ]");
+              stream << " ]";
             }
           }
         }
@@ -1596,28 +1295,28 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
       break;
     case SNT_ONE_OF:
       if (node->child) {
-        struct srgs_node *item = node->child;
+        srgs_node *item = node->child;
         if (node->num_children > 1) {
-          stream->write_function(stream, " (");
+          stream << " (";
         }
         for (; item; item = item->next) {
           if (item != node->child) {
-            stream->write_function(stream, " |");
+            stream << " |";
           }
-          stream->write_function(stream, " (");
+          stream << " (";
           if (!create_jsgf(grammar, item, stream)) {
             return 0;
           }
-          stream->write_function(stream, " )");
+          stream << " )";
         }
         if (node->num_children > 1) {
-          stream->write_function(stream, " )");
+          stream << " )";
         }
       }
       break;
     case SNT_REF: {
-      struct srgs_node *rule = node->value.ref.node;
-      stream->write_function(stream, " <%s>", rule->value.rule.id);
+      srgs_node *rule = node->value.ref.node;
+      stream << " <" << rule->value.rule.id << ">";
       break;
     }
     case SNT_ANY:
@@ -1631,69 +1330,52 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
 
 /**
  * Generate JSGF from SRGS document.  Call this after parsing SRGS document.
- * @param grammar the grammar
  * @return the JSGF document or NULL
  */
-const char *srgs_grammar_to_jsgf(struct srgs_grammar *grammar)
+const std::string &srgs_grammar::to_jsgf(void)
 {
-  if (!grammar) {
-    if(globals.logging_callback) {
-      globals.logging_callback(NULL, CSPEECH_LOG_CRIT, "grammar is NULL!\n");
-    }
-    return NULL;
+  static std::string nil_jsgf = "";
+  //switch_mutex_lock(grammar->mutex);
+  std::stringstream stream;
+  if (jsgf == "" && !create_jsgf(this, root, stream)) {
+    //switch_mutex_unlock(grammar->mutex);
+    return nil_jsgf;
   }
-  switch_mutex_lock(grammar->mutex);
-  if (!grammar->jsgf && !create_jsgf(grammar, grammar->root, NULL)) {
-    switch_mutex_unlock(grammar->mutex);
-    return NULL;
-  }
-  switch_mutex_unlock(grammar->mutex);
-  return grammar->jsgf;
+  //switch_mutex_unlock(grammar->mutex);
+  return jsgf;
 }
 
 /**
  * Generate JSGF file from SRGS document.  Call this after parsing SRGS document.
- * @param grammar the grammar
  * @param basedir the base path to use if file does not already exist
  * @param ext the extension to use
- * @return the path or NULL
+ * @return the path
  */
-const char *srgs_grammar_to_jsgf_file(struct srgs_grammar *grammar, const char *basedir, const char *ext)
+const std::string &srgs_grammar::to_jsgf_file(const std::string &basedir, const std::string &ext)
 {
-  if (!grammar) {
-    if(globals.logging_callback) {
-      globals.logging_callback(grammar, CSPEECH_LOG_CRIT, "grammar is NULL!\n");
-    }
-    return NULL;
-  }
-  switch_mutex_lock(grammar->mutex);
-  if (!grammar->jsgf_file_name) {
-    char file_name_buf[SWITCH_UUID_FORMATTED_LENGTH + 1];
-    switch_file_t *file;
-    switch_size_t len;
-    const char *jsgf = srgs_grammar_to_jsgf(grammar);
-                switch_uuid_str(file_name_buf, sizeof(file_name_buf));
-    grammar->jsgf_file_name = switch_core_sprintf(grammar->pool, "%s%s%s.%s", basedir, SWITCH_PATH_SEPARATOR, file_name_buf, ext);
-    if (!jsgf) {
-      switch_mutex_unlock(grammar->mutex);
-      return NULL;
+  static std::string nil_jsgf_file_name = "";
+  //switch_mutex_lock(grammar->mutex);
+  if (jsgf_file_name == "") {
+    /* TODO generate UUID instead of "foo */
+    FILE *file;
+    std::string jsgf = to_jsgf();
+    if (jsgf == "") {
+      return nil_jsgf_file_name;
     }
 
     /* write grammar to file */
-    if (switch_file_open(&file, grammar->jsgf_file_name, SWITCH_FOPEN_WRITE | SWITCH_FOPEN_TRUNCATE | SWITCH_FOPEN_CREATE, SWITCH_FPROT_OS_DEFAULT, grammar->pool) != SWITCH_STATUS_SUCCESS) {
-      if(globals.logging_callback) {
-        globals.logging_callback(NULL, CSPEECH_LOG_WARNING, "Failed to create jsgf file: %s!\n", grammar->jsgf_file_name);
-      }
-      grammar->jsgf_file_name = NULL;
-      switch_mutex_unlock(grammar->mutex);
-      return NULL;
+    jsgf_file_name = basedir + "/foo." + ext;
+    if (!(file = fopen(jsgf_file_name.c_str(), "w"))) {
+      globals.logging_callback(NULL, CSPEECH_LOG_WARNING, "Failed to create jsgf file: %s!\n", jsgf_file_name.c_str());
+      jsgf_file_name = "";
+      //switch_mutex_unlock(grammar->mutex);
+      return nil_jsgf_file_name;
     }
-    len = strlen(jsgf);
-    switch_file_write(file, jsgf, &len);
-    switch_file_close(file);
+    fwrite(jsgf.c_str(), sizeof(char), jsgf.length(), file);
+    fclose(file);
   }
-  switch_mutex_unlock(grammar->mutex);
-  return grammar->jsgf_file_name;
+  //switch_mutex_unlock(grammar->mutex);
+  return jsgf_file_name;
 }
 
 /**
@@ -1706,8 +1388,7 @@ int srgs_init(void)
   }
 
   globals.init = true;
-  globals.logging_callback = NULL;
-  switch_core_new_memory_pool(&globals.pool);
+  globals.logging_callback = default_logging_callback;
 
   add_root_tag_def("grammar", process_grammar, process_cdata_bad, "meta,metadata,lexicon,tag,rule");
   add_tag_def("ruleref", process_ruleref, process_cdata_bad, "");
@@ -1724,14 +1405,3 @@ int srgs_init(void)
 
   return 1;
 }
-
-/* For Emacs:
- * Local Variables:
- * mode:c
- * indent-tabs-mode:t
- * tab-width:4
- * c-basic-offset:4
- * End:
- * For VIM:
- * vim:set softtabstop=4 shiftwidth=4 tabstop=4 noet:
- */

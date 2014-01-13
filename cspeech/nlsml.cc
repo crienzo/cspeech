@@ -18,8 +18,7 @@
 #include <sstream>
 
 #include "cspeech.h"
-#include "nlsml.h"
-
+#if 0
 struct nlsml_parser;
 
 /** function to handle tag attributes */
@@ -474,6 +473,7 @@ int nlsml_init(void)
 
   return 1;
 }
+#endif
 
 /* For Emacs:
  * Local Variables:
