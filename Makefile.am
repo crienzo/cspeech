@@ -8,7 +8,7 @@ AUTOMAKE_OPTIONS = subdir-objects
 ACLOCAL_AMFLAGS = ${ACLOCAL_FLAGS}
 
 libcspeech_CFLAGS = $(PCRE_CFLAGS) $(IKSEMEL_CFLAGS)
-libcspeech_LIBADD = $(PCRE_LIBS) $(IKSEMEL_LIBS)
+libcspeech_@CSPEECH_API_VERSION@_la_LIBADD = $(PCRE_LIBS) $(IKSEMEL_LIBS)
 
 ## Define a libtool archive target "libcspeech-@CSPEECH_API_VERSION@.la", with
 ## @CSPEECH_API_VERSION@ substituted into the generated Makefile at configure

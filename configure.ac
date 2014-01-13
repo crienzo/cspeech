@@ -11,6 +11,7 @@ PKG_CHECK_MODULES([IKSEMEL], [iksemel])
 # the library.
 AC_CONFIG_HEADERS([config.h cspeechconfig.h])
 AC_PROG_CXX
+AM_PROG_CC_C_O
 LT_INIT([disable-static])
 
 # Define these substitions here to keep all version information in one place.

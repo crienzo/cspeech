@@ -68,13 +68,15 @@ enum cspeech_srgs_match_type {
 };
 
 struct cspeech_srgs_parser *cspeech_srgs_parser_new(const char *uuid);
+void cspeech_srgs_parser_destroy(struct cspeech_srgs_parser *parser);
 struct cspeech_srgs_grammar *cspeech_srgs_parse(struct cspeech_srgs_parser *parser, const char *document);
-const char *cspeech_srgs_to_regex(struct cspeech_srgs_grammar *grammar);
-const char *cspeech_srgs_to_jsgf(struct cspeech_srgs_grammar *grammar);
-const char *cspeech_srgs_to_jsgf_file(struct cspeech_srgs_grammar *grammar, const char *basedir, const char *ext);
+
+const char *cspeech_srgs_grammar_to_regex(struct cspeech_srgs_grammar *grammar);
+const char *cspeech_srgs_grammar_to_jsgf(struct cspeech_srgs_grammar *grammar);
+const char *cspeech_srgs_grammar_to_jsgf_file(struct cspeech_srgs_grammar *grammar, const char *basedir, const char *ext);
 enum cspeech_srgs_match_type cspeech_srgs_grammar_match(struct cspeech_srgs_grammar *grammar, const char *input, char **interpretation);
 void cspeech_srgs_grammar_destroy(struct cspeech_srgs_grammar *grammar);
-void cspeech_srgs_parser_destroy(struct cspeech_srgs_parser *parser);
+
 
 #ifdef __cplusplus
 }

@@ -92,10 +92,10 @@ static void test_match_duplicate_tag_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, duplicate_tag_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, duplicate_tag_grammar)));
 
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "0", &interpretation));
   ASSERT_NULL(interpretation);
@@ -161,10 +161,10 @@ static void test_match_adhearsion_ask_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, adhearsion_ask_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, adhearsion_ask_grammar)));
 
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "0", &interpretation));
   ASSERT_NULL(interpretation);
@@ -215,10 +215,10 @@ static void test_match_multi_digit_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, multi_digit_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, multi_digit_grammar)));
 
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "0", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1", &interpretation));
@@ -269,10 +269,10 @@ static void test_match_multi_rule_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, multi_rule_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, multi_rule_grammar)));
 
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "0", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1", &interpretation));
@@ -333,10 +333,10 @@ static void test_match_rayo_example_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, rayo_example_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, rayo_example_grammar)));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "0", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "2", &interpretation));
@@ -421,12 +421,12 @@ static void test_parse_grammar(void)
 
   parser = cspeech_srgs_parser_new("1234");
 
-  ASSERT_NOT_NULL(srgs_parse(parser, adhearsion_ask_grammar));
-  ASSERT_NULL(srgs_parse(parser, adhearsion_ask_grammar_bad));
-  ASSERT_NULL(srgs_parse(parser, NULL));
-  ASSERT_NULL(srgs_parse(NULL, adhearsion_ask_grammar));
-  ASSERT_NULL(srgs_parse(NULL, adhearsion_ask_grammar_bad));
-  ASSERT_NULL(srgs_parse(parser, bad_ref_grammar));
+  ASSERT_NOT_NULL(cspeech_srgs_parse(parser, adhearsion_ask_grammar));
+  ASSERT_NULL(cspeech_srgs_parse(parser, adhearsion_ask_grammar_bad));
+  ASSERT_NULL(cspeech_srgs_parse(parser, NULL));
+  ASSERT_NULL(cspeech_srgs_parse(NULL, adhearsion_ask_grammar));
+  ASSERT_NULL(cspeech_srgs_parse(NULL, adhearsion_ask_grammar_bad));
+  ASSERT_NULL(cspeech_srgs_parse(parser, bad_ref_grammar));
 
   cspeech_srgs_parser_destroy(parser);
 }
@@ -700,23 +700,23 @@ static void test_repeat_item_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NULL(srgs_parse(parser, repeat_item_grammar_bad));
-  ASSERT_NULL(srgs_parse(parser, repeat_item_grammar_bad2));
-  ASSERT_NULL(srgs_parse(parser, repeat_item_grammar_bad3));
-  ASSERT_NULL(srgs_parse(parser, repeat_item_grammar_bad4));
-  ASSERT_NULL(srgs_parse(parser, repeat_item_grammar_bad5));
-  ASSERT_NULL(srgs_parse(parser, repeat_item_grammar_bad6));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_grammar)));
+  ASSERT_NULL(cspeech_srgs_parse(parser, repeat_item_grammar_bad));
+  ASSERT_NULL(cspeech_srgs_parse(parser, repeat_item_grammar_bad2));
+  ASSERT_NULL(cspeech_srgs_parse(parser, repeat_item_grammar_bad3));
+  ASSERT_NULL(cspeech_srgs_parse(parser, repeat_item_grammar_bad4));
+  ASSERT_NULL(cspeech_srgs_parse(parser, repeat_item_grammar_bad5));
+  ASSERT_NULL(cspeech_srgs_parse(parser, repeat_item_grammar_bad6));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_grammar)));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1111#", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1111", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1234#", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1234", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "11115#", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "11115", &interpretation));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_range_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_range_grammar)));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1111#", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1111", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1234#", &interpretation));
@@ -727,7 +727,7 @@ static void test_repeat_item_grammar(void)
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "111156", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "1111567#", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "1111567", &interpretation));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_optional_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_optional_grammar)));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "1111#", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "1111", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "1234#", &interpretation));
@@ -744,7 +744,7 @@ static void test_repeat_item_grammar(void)
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "A#", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "A", &interpretation));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_plus_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_plus_grammar)));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1111#", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1111", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1234#", &interpretation));
@@ -761,7 +761,7 @@ static void test_repeat_item_grammar(void)
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "A#", &interpretation));
   ASSERT_EQUALS(CSMT_NO_MATCH, cspeech_srgs_grammar_match(grammar, "A", &interpretation));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_star_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_star_grammar)));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1111#", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_PARTIAL, cspeech_srgs_grammar_match(grammar, "1111", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1234#", &interpretation));
@@ -813,10 +813,10 @@ static void test_repeat_item_range_ambiguous_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_range_ambiguous_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_range_ambiguous_grammar)));
   ASSERT_EQUALS(CSMT_MATCH, cspeech_srgs_grammar_match(grammar, "1", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH, cspeech_srgs_grammar_match(grammar, "12", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "123", &interpretation));
@@ -858,10 +858,10 @@ static void test_repeat_item_range_optional_pound_grammar(void)
 {
   struct cspeech_srgs_parser *parser;
   struct cspeech_srgs_grammar *grammar;
-  const char *interpretation;
+  char *interpretation;
 
   parser = cspeech_srgs_parser_new("1234");
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, repeat_item_range_optional_pound_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, repeat_item_range_optional_pound_grammar)));
   ASSERT_EQUALS(CSMT_MATCH, cspeech_srgs_grammar_match(grammar, "1", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH_END, cspeech_srgs_grammar_match(grammar, "1#", &interpretation));
   ASSERT_EQUALS(CSMT_MATCH, cspeech_srgs_grammar_match(grammar, "12", &interpretation));
@@ -932,14 +932,14 @@ static void test_jsgf(void)
   const char *jsgf;
   parser = cspeech_srgs_parser_new("1234");
 
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, adhearsion_ask_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, adhearsion_ask_grammar)));
   ASSERT_NOT_NULL((jsgf = cspeech_srgs_grammar_to_jsgf(grammar)));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, voice_srgs1)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, voice_srgs1)));
   ASSERT_NOT_NULL((jsgf = cspeech_srgs_grammar_to_jsgf(grammar)));
   ASSERT_STRING_EQUALS(voice_jsgf, jsgf);
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, multi_rule_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, multi_rule_grammar)));
   ASSERT_NOT_NULL((jsgf = cspeech_srgs_grammar_to_jsgf(grammar)));
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, rayo_test_srgs)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, rayo_test_srgs)));
   ASSERT_NOT_NULL((jsgf = cspeech_srgs_grammar_to_jsgf(grammar)));
   ASSERT_NULL(cspeech_srgs_grammar_to_jsgf(NULL));
   cspeech_srgs_parser_destroy(parser);
@@ -1079,7 +1079,7 @@ static void test_metadata_grammar(void)
   struct cspeech_srgs_grammar *grammar;
   parser = cspeech_srgs_parser_new("1234");
 
-  ASSERT_NOT_NULL((grammar = cspeech_srgs_parser(parser, metadata_grammar)));
+  ASSERT_NOT_NULL((grammar = cspeech_srgs_parse(parser, metadata_grammar)));
   ASSERT_NOT_NULL(cspeech_srgs_grammar_to_jsgf(grammar));
 }
 
